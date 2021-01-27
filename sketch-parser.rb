@@ -3,83 +3,16 @@ require 'zip/zip'
 require 'json'
 require 'recursive-open-struct'
 
+# Require classes
+require './array'
+require './layer'
+
 file = ""
 destination = "./sketch/"
 
 file_path = ARGV
 
 log = false
-
-class Array
-  def has_layer_children_within(layer)
-    select { |child| child.is_within(layer) }.any?
-  end
-
-  def get_layer_children_within(layer)
-    select { |child| child.is_within(layer) }
-  end
-
-  def has_layers_inline_with(layer)
-    select { |child| child.is_inline_with(layer) }.any?
-  end
-end
-
-class Layer
-  attr_reader :is_artboard, :name, :width, :height, :x, :y, :string
-
-  def initialize(layer)
-    # Allows for dot notation layer on, such as in 'is_within()' where we use layer1.width rather than layer1[:width]
-    layer_struct = RecursiveOpenStruct.new(layer, recurse_over_arrays: true)
-
-    @layers = layer_struct.layers
-    @is_artboard = layer_struct._class.eql?("artboard")
-    @name = layer_struct.name
-    @height = Integer(layer_struct.frame.height)
-    @width = Integer(layer_struct.frame.width)
-    @x = @is_artboard ? 0 : Integer(layer_struct.frame.x)
-    @y = @is_artboard ? 0 : Integer(layer_struct.frame.y)
-    if layer_struct.attributedString
-      @string = layer_struct.attributedString.string
-    end
-  end
-
-  def is_inline_with(layer)
-    if !layer.nil?
-      if !is_stacked(layer)
-        return (self.vertical_center - layer.vertical_center).abs < 5
-      end
-    end
-
-    false
-  end
-
-  # The layers are on top of eachother
-  def is_stacked(layer)
-    if !layer.nil?
-      is_within(layer) || layer.is_within(self)
-    end
-
-    false
-  end
-
-  # Strict enforces that the small has to be on top the large
-  def is_within(layer)
-    if !layer.nil?
-      layerStartsWithinXBoundaries = self.x > layer.x && self.x < (layer.x + layer.width)
-      layerStartsWithinYBoundaries = self.y > layer.y && self.y < (layer.y + layer.height)
-      # puts "large is #{large.name} at x: #{large.x}, y: #{large.y} and small is #{small.name} at x: #{small.x}, y: #{small.y}"
-      return layerStartsWithinXBoundaries && layerStartsWithinYBoundaries
-    end
-
-    false
-  end
-
-  def vertical_center
-    height = self.height.to_f
-    y_cord = self.y.to_f
-    (height + y_cord) / 2
-  end
-end
 
 if ARGV.empty?
   # puts "No file was referenced. Run the script with a file path (i e 'sketch-parser.rb File.sketch')"
@@ -108,8 +41,54 @@ def parse(layer, layers)
   markup = write_markup_for(layer, layers)
 
   # Output generated marup
-  puts "\nFinalized markup to:\n"
-  puts markup
+  puts "\n# # # # # Finalized markup to:\n\n"
+
+  # markup.each do |l|
+  #   # puts l.class
+  #   if l.class.eql?(Array)
+  #     l.each do |layer|
+  #       if layer.class.eql?(Array)
+  #         layer.each do |ll|
+  #           if ll.class.eql?(Array)
+  #             ll.each do |lll|
+  #               if lll.class.eql?(Array)
+  #                 lll.each do |llll|
+  #                   puts llll.inspect
+  #                   if llll.class.eql?(Array)
+  #                     puts 'array'
+  #                   elsif llll.class.eql?(String)
+  #                     puts llll
+  #                   else
+  #                     puts llll.name
+  #                   end
+  #                 end
+  #               elsif lll.class.eql?(String)
+  #                 puts lll
+  #               else
+  #                 puts lll.name
+  #               end
+  #             end
+  #           elsif ll.class.eql?(String)
+  #             puts ll
+  #           else
+  #             puts ll.name
+  #           end
+  #         end
+  #       elsif layer.class.eql?(String)
+  #         puts layer
+  #       else
+  #         puts layer.name
+  #       end
+  #     end
+  #   end
+  #   # if l.class.eql?(String)
+  #   #   puts 'string'
+  #   # end
+  # end
+
+  indent_r(markup)
+  puts "\n# # # #"
+  # puts markup
 
   return layers
 end
@@ -119,10 +98,8 @@ def parse_page
   # PP.pp(fc)
 
   page_hash = JSON.parse(File.read(fc.first))
-
   page_hash['layers'].each_with_index do |artboard, index|
-    puts "\n# # # # #\nArtboard: #{artboard['name']}\n# # # # #\n"
-
+    # puts "\n# # # # #\nArtboard: #{artboard['name']}\n# # # # #\n"
     layers = Array.new
     artboard['layers'].map do |layer|
       layers << Layer.new(layer)
@@ -143,44 +120,13 @@ end
 # TODO: LAYER GROUP MANAGEMENT
 ##########
 
-def sort_layers(layers)
-  # Order layers from top left -> right, as read and implemented
-  layers.sort_by! { |layer| [layer.y, layer.x] }
-
-  inline_layers = Array.new
-  # Populate inline_layers
-  layers.each_with_index do |layer, index|
-    if layer.is_inline_with(layers[index+1]) && inline_layers.empty? # If two elements are inline, initiate the array if empty
-      # puts "Writing #{layer.name} and #{layers[index+1].name} to inline_layers"
-      inline_layers.push(layer, layers[index+1])
-    end
-
-    if !inline_layers.include?(layer) && inline_layers.has_layers_inline_with(layer) # If other layers are inline, is it inline with those?
-      # puts "Writing #{layer.name} to inline_layers"
-      inline_layers << layer
-    end
-  end
-
-  # Apply inline_layers
-  layers.dup.each_with_index do |layer, index|
-    if inline_layers.include?(layer)
-      inline_layers.sort_by! { |layer| [layer.x] }.each_with_index do |inline_layer, inline_index|
-        layers[index+inline_index] = inline_layer
-      end
-      inline_layers = Array.new
-      break
-    end
-  end
-
-  return layers
-end
-
-def write_markup_for(layer = nil, layers)
-  
+def write_markup_for(layer = nil, layers) 
   # First iteration, there's no layer being passed in, so we assume the biggest one
   layer = layers.delete(layers.sort_by { |layer| layer.width * layer.height }.reverse.first) unless layer
+
   # Retrieve first-level children of layer
-  children = sort_layers(layers.get_layer_children_within(layer))
+  children = layers.get_layer_children_within(layer).order_by_DOM
+
   # Purge layers from the children
   children.each { |layer| layers.delete(layer) }
 
@@ -189,7 +135,9 @@ def write_markup_for(layer = nil, layers)
     
     # Ignore opening artboard
     if !layer.is_artboard
-      markup << componetize(layer, 'opening') # Open parent
+      markup << layer.opening_tag # Open parent
+    else
+      markup << "<Layout.Column desktopWidth={#{layer.column_count}}>"
     end
 
     # Monitor if we have open Flex wrappers
@@ -217,13 +165,15 @@ def write_markup_for(layer = nil, layers)
 
     # Ignore opening artboard
     if !layer.is_artboard
-      markup << componetize(layer, 'closing') # Close parent
+      markup << layer.closing_tag # Close parent
+    else
+      markup << "</Layout.Column>"
     end
   else
-    markup = Array.new << componetize(layer)
+    markup = Array.new << layer.tag
   end
 
-  return markup
+  return markup.flatten # Clear it from an unnecessary wrapping array
 end
 
 # Only works for two entities in a row
@@ -257,15 +207,17 @@ def get_justify_content(layer1, layer2, parent)
   return ""
 end
 
-def componetize(layer, openingOrClosing = nil)
-  if layer.string
-    layer_markup = ("<" << layer.name << ">" << layer.string << "<" << layer.name << "/>")
-  elsif openingOrClosing.eql?('opening')
-    layer_markup = "<" << layer.name << ">"
-  elsif openingOrClosing.eql?('closing')
-    layer_markup = "</" << layer.name << ">"
+def indent_r(markup, indentation = "")
+  if markup.class.eql?(Array)
+    markup.map do |mu|
+      indent_r(mu, indentation + "  ")
+    end
   else
-    layer_markup = "<" << layer.name << "/>"
+    if markup.include?("Flex")
+      puts "#{indentation}  #{markup}"
+    else
+      puts "#{indentation.sub("  ", "")}#{markup}"
+    end
   end
 end
 
